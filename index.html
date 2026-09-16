@@ -1427,6 +1427,9 @@ th {
         <button class="btn btn-secondary" style="width:auto; padding:8px 12px; font-size:13px;" onclick="promptChangeTeacherPassword()">
           <span>🔑</span> 修改管理密碼
         </button>
+        <button class="btn btn-secondary" style="width:auto; padding:8px 12px; font-size:13px; background:#4338ca; color:#fff;" onclick="fetchCloudData(); showToast('🔄 正在從 Google 試算表同步全班最新成績...');">
+          <span>🔄</span> 立即同步雲端
+        </button>
         <button class="export-btn" style="background:#15803d;" onclick="exportGradesToExcel()">
           <span>📊</span> 下載最新成績 Excel 表 (.xls)
         </button>
@@ -2751,6 +2754,7 @@ function saveAndPublishAllPassages() {
   persistAllData();
   renderTeacherTable();
   showToast("💾 已儲存！正在同步發布至 Google 雲端...");
+  syncPassagesToCloud(passages);
 }
 
 function resetAllStudentSubmissions() {
@@ -4067,7 +4071,30 @@ function getTeacherPassword() {
 
 function setTeacherPassword(newPwd) {
   localStorage.setItem("echo_teacher_password", newPwd);
+  syncPasswordToCloud(newPwd);
 }
+
+function syncPasswordToCloud(newPwd) {
+  const webhookUrl = getActiveWebhookUrl();
+  if (!webhookUrl) return;
+
+  const payload = {
+    action: "savePassword",
+    password: newPwd
+  };
+
+  fetch(webhookUrl, {
+    method: "POST",
+    mode: "no-cors",
+    headers: { "Content-Type": "text/plain" },
+    body: JSON.stringify(payload)
+  }).then(() => {
+    console.log("已將最新密碼同步發布至雲端！");
+  }).catch(err => {
+    console.warn("同步密碼至雲端失敗：", err);
+  });
+}
+
 
 // 切換至學生入口（任何時候皆可點選直接回到學生模式）
 function switchToStudentPortal() {
@@ -4582,17 +4609,31 @@ function fetchCloudData() {
     .then(data => {
       if (!data || data.status !== "success") return;
 
-      // 1. 若雲端有老師更新的段落，同步更新本地課文
+      const cloudStatusEl = document.getElementById("cloudStatusBadge");
+      if (cloudStatusEl) {
+        cloudStatusEl.innerHTML = "🟢 雲端已同步";
+        cloudStatusEl.style.background = "#dcfce7";
+        cloudStatusEl.style.color = "#15803d";
+      }
+
+      // 1. 同步密碼
+      if (data.password && typeof data.password === 'string' && data.password.trim()) {
+        localStorage.setItem("echo_teacher_password", data.password.trim());
+      }
+
+      // 2. 同步課文段落
       if (data.passages && Array.isArray(data.passages) && data.passages.length > 0) {
         passages = data.passages;
         localStorage.setItem("echo_multi_passages_v5", JSON.stringify(passages));
         updateStudentsAssignedTitles();
-        if (!isTeacherMode && currentStudent) {
+        if (isTeacherMode) {
+          renderTeacherPassageCards();
+        } else if (currentStudent) {
           setupStudentAssignedPassage();
         }
       }
 
-      // 2. 若在老師模式，且雲端有最新成績總表，自動更新全班名冊與繳交進度
+      // 3. 同步成績總表至老師後台
       if (isTeacherMode && data.grades && Array.isArray(data.grades)) {
         let hasNewSubmission = false;
         data.grades.forEach(g => {
@@ -4623,6 +4664,12 @@ function fetchCloudData() {
     })
     .catch(err => {
       console.warn("雲端資料同步中斷：", err);
+      const cloudStatusEl = document.getElementById("cloudStatusBadge");
+      if (cloudStatusEl) {
+        cloudStatusEl.innerHTML = "🟡 離線暫存";
+        cloudStatusEl.style.background = "#fef9c3";
+        cloudStatusEl.style.color = "#854d0e";
+      }
     });
 }
 
