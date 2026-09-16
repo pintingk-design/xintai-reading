@@ -4071,32 +4071,41 @@ function setTeacherPassword(newPwd) {
 
 // 切換至學生入口（任何時候皆可點選直接回到學生模式）
 function switchToStudentPortal() {
-  if (cloudSyncPollingTimer) clearInterval(cloudSyncPollingTimer);
+  if (typeof cloudSyncPollingTimer !== 'undefined' && cloudSyncPollingTimer) {
+    clearInterval(cloudSyncPollingTimer);
+    cloudSyncPollingTimer = null;
+  }
   stopAnyPlayingAudio();
   if (isRecording) {
     stopRecording();
   }
 
+  isTeacherMode = false;
   const studentSec = document.getElementById("studentSection");
   const teacherSec = document.getElementById("teacherSection");
   const btnStudent = document.getElementById("btnStudentPortal");
   const btnTeacher = document.getElementById("btnTeacherPortal");
   const roleText = document.getElementById("currentRoleText");
 
-  studentSec.style.display = "block";
-  teacherSec.style.display = "none";
+  if (studentSec) studentSec.style.display = "block";
+  if (teacherSec) teacherSec.style.display = "none";
   document.body.classList.remove("teacher-mode");
 
-  btnStudent.classList.add("active");
-  btnTeacher.classList.remove("active");
-  roleText.innerText = "學生模式";
+  if (btnStudent) btnStudent.classList.add("active");
+  if (btnTeacher) btnTeacher.classList.remove("active");
+  if (roleText) roleText.innerText = "學生模式";
 
-  // 若未登入學生，確保回到 13 位學生點選網格
+  // 確保學生主畫面（座號網格或任務頁）順暢顯示
+  const loginCard = document.getElementById("loginCard");
+  const taskView = document.getElementById("taskView");
+
   if (!currentStudent) {
-    document.getElementById("loginCard").style.display = "block";
-    document.getElementById("taskView").style.display = "none";
+    if (loginCard) loginCard.style.display = "block";
+    if (taskView) taskView.style.display = "none";
     renderSeatGrid();
   } else {
+    if (loginCard) loginCard.style.display = "none";
+    if (taskView) taskView.style.display = "block";
     setupStudentAssignedPassage();
   }
 }
@@ -4386,62 +4395,239 @@ function saveGSheetWebhookUrl() {
   }
 }
 
+// ==================== Google 試算表雙向即時連動核心 ====================
+let cloudSyncPollingTimer = null;
+
 function copyGoogleAppsScriptCode() {
-  const scriptCode = `function doPost(e) {
-  var sheet = SpreadsheetApp.getActiveSpreadsheet().getActiveSheet();
-  var data = JSON.parse(e.postData.contents);
+  const scriptCode = `// ===== 五年甲班 國語朗讀雙向雲端連動腳本 =====
+function doGet(e) {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var sheet = ss.getActiveSheet();
+  var props = PropertiesService.getScriptProperties();
   
-  // 欄位：時間戳記, 座號, 姓名, 段落, 綜合得分, 正確率, 流暢度, 語速
-  sheet.appendRow([
-    new Date(),
-    data.seatNumber,
-    data.studentName,
-    data.passageTitle,
-    data.score,
-    data.accuracy + "%",
-    data.fluency + "%",
-    data.wpm + " 字/分"
-  ]);
+  // 1. 取得老師最新發布的課文段落與學生指派
+  var passagesJson = props.getProperty("cloud_passages_v1");
+  var passages = null;
+  if (passagesJson) {
+    try { passages = JSON.parse(passagesJson); } catch(err){}
+  }
   
-  return ContentService.createTextOutput(JSON.stringify({status: "success"}))
+  // 2. 取得全班最新成績總表
+  var data = sheet.getDataRange().getValues();
+  var grades = [];
+  if (data.length > 1) {
+    for (var i = 1; i < data.length; i++) {
+      var row = data[i];
+      if (row[0] !== "" && row[0] !== undefined) {
+        grades.push({
+          seatNumber: String(row[0]).padStart(2, '0'),
+          name: String(row[1] || ''),
+          status: String(row[2] || '未繳交'),
+          time: row[3] ? Utilities.formatDate(new Date(row[3]), "GMT+8", "yyyy-MM-dd HH:mm") : (row[3] || '-'),
+          score: row[4] !== undefined ? String(row[4]) : '-',
+          accuracy: row[5] !== undefined ? String(row[5]) : '-',
+          fluency: row[6] !== undefined ? String(row[6]) : '-',
+          wpm: row[8] !== undefined ? String(row[8]) : '-',
+          errors: row[9] ? String(row[9]) : ''
+        });
+      }
+    }
+  }
+  
+  var output = {
+    status: "success",
+    passages: passages,
+    grades: grades
+  };
+  
+  return ContentService.createTextOutput(JSON.stringify(output))
+    .setMimeType(ContentService.MimeType.JSON);
+}
+
+function doPost(e) {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var sheet = ss.getActiveSheet();
+  var props = PropertiesService.getScriptProperties();
+  
+  var payload = JSON.parse(e.postData.contents);
+  
+  // 動作 A：老師端儲存並發布課文段落
+  if (payload.action === "savePassages") {
+    props.setProperty("cloud_passages_v1", JSON.stringify(payload.passages));
+    return ContentService.createTextOutput(JSON.stringify({ status: "success", type: "passages_saved" }))
+      .setMimeType(ContentService.MimeType.JSON);
+  }
+  
+  // 動作 B：學生平板送出朗讀成績
+  var seatNumber = parseInt(payload.seatNumber, 10);
+  var data = sheet.getDataRange().getValues();
+  var targetRow = -1;
+  
+  for (var i = 1; i < data.length; i++) {
+    if (parseInt(data[i][0], 10) === seatNumber) {
+      targetRow = i + 1;
+      break;
+    }
+  }
+  
+  var nowStr = Utilities.formatDate(new Date(), "GMT+8", "yyyy-MM-dd HH:mm");
+  var rowValues = [
+    seatNumber,
+    payload.studentName,
+    "已繳交",
+    nowStr,
+    payload.score,
+    payload.accuracy,
+    payload.fluency,
+    100,
+    payload.wpm,
+    payload.errors || "無",
+    0
+  ];
+  
+  if (targetRow > 0) {
+    sheet.getRange(targetRow, 1, 1, rowValues.length).setValues([rowValues]);
+  } else {
+    sheet.appendRow(rowValues);
+  }
+  
+  return ContentService.createTextOutput(JSON.stringify({ status: "success", type: "grade_saved" }))
     .setMimeType(ContentService.MimeType.JSON);
 }`;
 
   navigator.clipboard.writeText(scriptCode).then(() => {
-    alert("已將 Google Apps Script 程式碼複製到剪貼簿！\n請至 Google 試算表「擴充功能 ➔ Apps Script」貼上並部署。");
+    alert("已複製最新雙向連動 Apps Script 程式碼！\\n請至 Google 試算表「擴充功能 ➔ Apps Script」貼上並部署為網頁應用程式。");
   }).catch(() => {
-    prompt("請複製以下 Apps Script 程式碼：", scriptCode);
+    prompt("請全選複製以下 Apps Script 程式碼：", scriptCode);
   });
 }
 
-// 當學生繳交時，自動向 Google 試算表發送資料
+function copyStudentShareUrlWithApi() {
+  const webhookUrl = getActiveWebhookUrl();
+  if (!webhookUrl) {
+    alert("請先填寫並儲存 Google 試算表 Webhook 網址，才能產生全班專屬免設定連結！");
+    return;
+  }
+  const cleanBase = window.location.href.split('?')[0];
+  const fullShareUrl = `${cleanBase}?api=${encodeURIComponent(webhookUrl)}`;
+  navigator.clipboard.writeText(fullShareUrl).then(() => {
+    alert("已複製「含雲端連動之學生專屬網址」！\\n\\n學生或平板只要點開這個網址，完全不需要任何設定，就會自動與老師的 Google 試算表雙向即時連動！");
+  }).catch(() => {
+    prompt("學生專屬免設定網址：", fullShareUrl);
+  });
+}
+
+// 學生繳交時，自動向雲端試算表發送最新成績
 function syncSubmissionToGoogleSheet(studentData) {
   const webhookUrl = getActiveWebhookUrl();
   if (!webhookUrl) return;
 
   const payload = {
+    action: "submitGrade",
     seatNumber: String(studentData.id).padStart(2, '0'),
     studentName: studentData.name,
     passageTitle: studentData.assignedPassageTitle,
-    attemptCount: studentData.attempts ? studentData.attempts.length : 1,
     score: studentData.score,
-    bestScore: studentData.bestScore || studentData.score,
     accuracy: studentData.acc,
     fluency: studentData.flu,
     wpm: studentData.wpm,
+    errors: studentData.errors || "無",
     timestamp: studentData.time
   };
 
   fetch(webhookUrl, {
     method: "POST",
     mode: "no-cors",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "text/plain" },
     body: JSON.stringify(payload)
   }).then(() => {
     console.log("已即時同步寫入 Google 試算表！");
   }).catch(err => {
     console.warn("同步至 Google 試算表失敗：", err);
   });
+}
+
+// 老師發布段落時，同步更新至雲端
+function syncPassagesToCloud(passagesList) {
+  const webhookUrl = getActiveWebhookUrl();
+  if (!webhookUrl) return;
+
+  const payload = {
+    action: "savePassages",
+    passages: passagesList
+  };
+
+  fetch(webhookUrl, {
+    method: "POST",
+    mode: "no-cors",
+    headers: { "Content-Type": "text/plain" },
+    body: JSON.stringify(payload)
+  }).then(() => {
+    console.log("已將最新段落指派同步發布至雲端！");
+  }).catch(err => {
+    console.warn("同步段落至雲端失敗：", err);
+  });
+}
+
+// 從雲端主動拉取最新資料 (學生平板拉課文，老師電腦拉成績)
+function fetchCloudData() {
+  const webhookUrl = getActiveWebhookUrl();
+  if (!webhookUrl) return;
+
+  fetch(webhookUrl + "?action=getData", { method: "GET" })
+    .then(res => res.json())
+    .then(data => {
+      if (!data || data.status !== "success") return;
+
+      // 1. 若雲端有老師更新的段落，同步更新本地課文
+      if (data.passages && Array.isArray(data.passages) && data.passages.length > 0) {
+        passages = data.passages;
+        localStorage.setItem("echo_multi_passages_v5", JSON.stringify(passages));
+        updateStudentsAssignedTitles();
+        if (!isTeacherMode) {
+          selectStudent(currentStudent ? currentStudent.id : 1);
+        }
+      }
+
+      // 2. 若在老師模式，且雲端有最新成績總表，自動更新全班名冊與繳交進度
+      if (isTeacherMode && data.grades && Array.isArray(data.grades)) {
+        let hasNewSubmission = false;
+        data.grades.forEach(g => {
+          const s = students.find(item => String(item.id).padStart(2, '0') === g.seatNumber);
+          if (s) {
+            if (s.status !== 'submitted' && g.status === '已繳交') {
+              hasNewSubmission = true;
+            }
+            if (g.status === '已繳交') {
+              s.status = 'submitted';
+              s.time = g.time || s.time;
+              s.score = g.score || s.score;
+              s.acc = g.accuracy || s.acc;
+              s.flu = g.fluency || s.flu;
+              s.wpm = g.wpm || s.wpm;
+              s.errors = g.errors || s.errors;
+            }
+          }
+        });
+
+        if (hasNewSubmission) {
+          persistAllData();
+          renderTeacherTable();
+          playChimeSound();
+          showToast("🔔 收到學生最新朗讀成績！已即時刷新後台名冊。");
+        }
+      }
+    })
+    .catch(err => {
+      console.warn("雲端資料同步中斷：", err);
+    });
+}
+
+// 啟動全自動背景定時輪詢
+function startCloudSyncPolling() {
+  if (cloudSyncPollingTimer) clearInterval(cloudSyncPollingTimer);
+  fetchCloudData();
+  cloudSyncPollingTimer = setInterval(fetchCloudData, 7000);
 }
 
 function exportGradesToCSV() {
