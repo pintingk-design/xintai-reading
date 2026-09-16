@@ -1146,6 +1146,11 @@ th {
         💾 儲存連動設定
       </button>
     </div>
+    <div style="margin-top: 10px;">
+      <button class="btn btn-success" style="width:100%; background:#059669; color:#fff;" onclick="copyStudentShareUrlWithApi()">
+        📲 複製含雲端連動之學生專屬網址（發給全班平板即刻免設定同步）
+      </button>
+    </div>
   </div>
 </div>
 
@@ -4054,6 +4059,7 @@ function setTeacherPassword(newPwd) {
 
 // 切換至學生入口（任何時候皆可點選直接回到學生模式）
 function switchToStudentPortal() {
+  if (cloudSyncPollingTimer) clearInterval(cloudSyncPollingTimer);
   stopAnyPlayingAudio();
   if (isRecording) {
     stopRecording();
@@ -4132,6 +4138,7 @@ function showTeacherBackendView() {
 
   renderTeacherPassageCards();
   renderTeacherTable();
+  startCloudSyncPolling();
 }
 
 function promptChangeTeacherPassword() {
