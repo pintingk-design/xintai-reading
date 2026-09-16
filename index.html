@@ -1151,6 +1151,9 @@ th {
         📲 複製含雲端連動之學生專屬網址（發給全班平板即刻免設定同步）
       </button>
     </div>
+    <div style="margin-top: 8px;">
+      <textarea id="directShareUrlBox" readonly style="display:none; width:100%; font-size:12px; padding:6px; border:1px solid #10b981; border-radius:6px; background:#f0fdf4; color:#065f46; box-sizing:border-box;" rows="2"></textarea>
+    </div>
   </div>
 </div>
 
@@ -1548,6 +1551,15 @@ th {
 <div class="toast" id="toast">已儲存！</div>
 
 <script>
+// 預設全班內建 Google 雲端試算表雙向同步 API (免帶參數即可全自動連線)
+const DEFAULT_GSHEET_WEBHOOK = "https://script.google.com/macros/s/AKfycbyAYU9n4zFEPXhu7rayT3Q9mhaDMMpqnw3dPLH8uEFKstSUkvJ8ufd6-xAjBiHVUF0S/exec";
+
+function getActiveWebhookUrl() {
+  const saved = getActiveWebhookUrl();
+  if (saved && saved.trim()) return saved.trim();
+  return DEFAULT_GSHEET_WEBHOOK;
+}
+
 
 
 // ==================== 老師示範語速控制 (0.7x 為基準正常速度) ====================
@@ -4355,7 +4367,7 @@ function copyCurrentWebUrl() {
 function openGSheetSyncModal() {
   const modal = document.getElementById("gsheetSyncModal");
   modal.style.display = "flex";
-  const savedUrl = localStorage.getItem("echo_gsheet_webhook") || "";
+  const savedUrl = getActiveWebhookUrl();
   document.getElementById("gsheetWebhookInput").value = savedUrl;
 }
 
@@ -4404,7 +4416,7 @@ function copyGoogleAppsScriptCode() {
 
 // 當學生繳交時，自動向 Google 試算表發送資料
 function syncSubmissionToGoogleSheet(studentData) {
-  const webhookUrl = localStorage.getItem("echo_gsheet_webhook");
+  const webhookUrl = getActiveWebhookUrl();
   if (!webhookUrl) return;
 
   const payload = {
