@@ -2138,7 +2138,7 @@ function getCharAlignmentScore(targetChar, spokenChar) {
 
   if (zyT && zyS) {
     const rel = analyzePhoneticRelation(zyT, zyS);
-    if (rel.type === 'homophone') return 2.7; // 同音字（發音正確）
+    if (rel.type === 'homophone') return 3.2; // 同音字（發音正確）
     if (rel.sim >= 0.8) return 1.8;           // 極近音（平翹舌、前後鼻音、聲調）
     if (rel.sim >= 0.5) return 1.1;           // 近音
     return 0.3;                               // 雖然不同音，但仍是學生唸出的國字，遠優於 GAP -2.5
@@ -2265,12 +2265,12 @@ function alignTargetAndSpokenWords(targetText, spokenText) {
         if (rel.type === "homophone") {
           // 同音字（發音完全正確）
           correctCount++;
-          earnedCredit += 0.98;
+          earnedCredit += 1.0; // 拼音（含聲調）相同即完全正確，不扣分
           comparison.push({
             target: tChar,
             spoken: sChar,
             status: "homophone",
-            statusLabel: "同音",
+            statusLabel: "正確（同音）",
             reason: `同音字（注音皆為 ${zyT}，發音正確）`,
             zhuyin: zyT,
             spokenZhuyin: zyS
